@@ -90,6 +90,7 @@ class MetaClusterModel(BaseMetaClusterModel):
         clustering_model: Union[BaseClusteringMethod, None] = None,
         max_clusters: int = 10,
         console: Optional["Console"] = None,
+        base_url: str | None = None,
         **kwargs,  # For future use
     ):
         if clustering_model is None:
@@ -99,10 +100,18 @@ class MetaClusterModel(BaseMetaClusterModel):
 
         self.max_concurrent_requests = max_concurrent_requests
         self.sem = Semaphore(max_concurrent_requests)
+        self.base_url = base_url
 
         import instructor
 
-        self.client = instructor.from_provider(model, async_client=True)
+        # Create client with custom base_url if provided for OpenAI models
+        if base_url and model.startswith("openai/"):
+            from openai import AsyncOpenAI
+            openai_client = AsyncOpenAI(base_url=base_url)
+            self.client = instructor.from_openai(openai_client)
+        else:
+            self.client = instructor.from_provider(model, async_client=True)
+
         self.console = console
         self.max_clusters = max_clusters
 
@@ -115,7 +124,7 @@ class MetaClusterModel(BaseMetaClusterModel):
         self.console = console
 
         logger.info(
-            f"Initialized MetaClusterModel with model={model}, max_concurrent_requests={max_concurrent_requests}, embedding_model={type(embedding_model).__name__}, clustering_model={type(clustering_model).__name__}, max_clusters={max_clusters}"
+            f"Initialized MetaClusterModel with model={model}, max_concurrent_requests={max_concurrent_requests}, embedding_model={type(embedding_model).__name__}, clustering_model={type(clustering_model).__name__}, max_clusters={max_clusters}, base_url={base_url}"
         )
 
         # Debug: Check if console is set
