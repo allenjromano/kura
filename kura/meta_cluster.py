@@ -107,10 +107,15 @@ class MetaClusterModel(BaseMetaClusterModel):
         # Create client with custom base_url if provided for OpenAI models
         if base_url and model.startswith("openai/"):
             from openai import AsyncOpenAI
+            # Strip provider prefix for actual API calls
+            model_name = model.split("/", 1)[1] if "/" in model else model
             openai_client = AsyncOpenAI(base_url=base_url)
             self.client = instructor.from_openai(openai_client)
+            # Store the model name to pass in API calls
+            self._api_model = model_name
         else:
             self.client = instructor.from_provider(model, async_client=True)
+            self._api_model = None
 
         self.console = console
         self.max_clusters = max_clusters
@@ -292,8 +297,9 @@ class MetaClusterModel(BaseMetaClusterModel):
         self, clusters: list[Cluster], sem: Semaphore
     ) -> list[str]:
         async with sem:
-            resp = await self.client.chat.completions.create(
-                messages=[
+            # Add model parameter if using custom base_url
+            api_kwargs = {
+                "messages": [
                     {
                         "role": "user",
                         "content": """
@@ -320,22 +326,27 @@ class MetaClusterModel(BaseMetaClusterModel):
                 """.strip(),
                     },
                 ],
-                response_model=CandidateClusters,
-                context={
+                "response_model": CandidateClusters,
+                "context": {
                     "clusters": clusters,
                     "desired_number": math.ceil(len(clusters) / 2)
                     if len(clusters)
                     >= 3  # If we have two clusters we just merge them tbh
                     else 1,
                 },
-                max_retries=3,
-            )
+                "max_retries": 3,
+            }
+            if hasattr(self, '_api_model') and self._api_model:
+                api_kwargs['model'] = self._api_model
+
+            resp = await self.client.chat.completions.create(**api_kwargs)
             return resp.candidate_cluster_names
 
     async def label_cluster(self, cluster: Cluster, candidate_clusters: list[str]):
         async with self.sem:
-            resp = await self.client.chat.completions.create(
-                messages=[
+            # Add model parameter if using custom base_url
+            api_kwargs = {
+                "messages": [
                     {
                         "role": "user",
                         "content": """
@@ -380,13 +391,17 @@ Based on this information, determine the most appropriate higher-level cluster a
                         """,
                     }
                 ],
-                response_model=ClusterLabel,
-                context={
+                "response_model": ClusterLabel,
+                "context": {
                     "cluster": cluster,
                     "candidate_clusters": candidate_clusters,
                 },
-                max_retries=3,
-            )
+                "max_retries": 3,
+            }
+            if hasattr(self, '_api_model') and self._api_model:
+                api_kwargs['model'] = self._api_model
+
+            resp = await self.client.chat.completions.create(**api_kwargs)
             return {
                 "cluster": cluster,
                 "label": resp.higher_level_cluster,
@@ -394,8 +409,9 @@ Based on this information, determine the most appropriate higher-level cluster a
 
     async def rename_cluster_group(self, clusters: list[Cluster]) -> list[Cluster]:
         async with self.sem:
-            resp = await self.client.chat.completions.create(
-                messages=[
+            # Add model parameter if using custom base_url
+            api_kwargs = {
+                "messages": [
                     {
                         "role": "system",
                         "content": """
@@ -420,9 +436,13 @@ Based on this information, determine the most appropriate higher-level cluster a
                         """,
                     },
                 ],
-                context={"clusters": clusters},
-                response_model=GeneratedCluster,
-            )
+                "context": {"clusters": clusters},
+                "response_model": GeneratedCluster,
+            }
+            if hasattr(self, '_api_model') and self._api_model:
+                api_kwargs['model'] = self._api_model
+
+            resp = await self.client.chat.completions.create(**api_kwargs)
 
             res = []
 

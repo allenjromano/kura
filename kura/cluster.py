@@ -126,10 +126,15 @@ class ClusterDescriptionModel(BaseClusterDescriptionModel):
         # Create client with custom base_url if provided for OpenAI models
         if self.base_url and self.model.startswith("openai/"):
             from openai import AsyncOpenAI
+            # Strip provider prefix for actual API calls
+            model_name = self.model.split("/", 1)[1] if "/" in self.model else self.model
             openai_client = AsyncOpenAI(base_url=self.base_url)
             self.client = instructor.from_openai(openai_client)
+            # Store the model name to pass in API calls
+            self._api_model = model_name
         else:
             self.client = instructor.from_provider(self.model, async_client=True)
+            self._api_model = None
 
         if not self.console:
             # Simple processing without rich display
@@ -179,20 +184,25 @@ class ClusterDescriptionModel(BaseClusterDescriptionModel):
         )
         async with semaphore:
             try:
-                resp = await client.chat.completions.create(
-                    messages=[
+                # Add model parameter if using custom base_url
+                api_kwargs = {
+                    "messages": [
                         {
                             "role": "system",
                             "content": prompt,
                         },
                     ],
-                    response_model=GeneratedCluster,
-                    temperature=self.temperature,
-                    context={
+                    "response_model": GeneratedCluster,
+                    "temperature": self.temperature,
+                    "context": {
                         "positive_examples": summaries,
                         "contrastive_examples": contrastive_examples,
                     },
-                )
+                }
+                if hasattr(self, '_api_model') and self._api_model:
+                    api_kwargs['model'] = self._api_model
+
+                resp = await client.chat.completions.create(**api_kwargs)
 
                 cluster = Cluster(
                     name=resp.name,
