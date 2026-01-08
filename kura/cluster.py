@@ -83,6 +83,7 @@ class ClusterDescriptionModel(BaseClusterDescriptionModel):
         temperature: float = 0.2,
         checkpoint_filename: str = "clusters",
         console: Optional[Console] = None,
+        base_url: str | None = None,
     ):
         """
         Initialize ClusterModel with core configuration.
@@ -93,15 +94,17 @@ class ClusterDescriptionModel(BaseClusterDescriptionModel):
             temperature: LLM temperature for generation
             checkpoint_filename: Filename for checkpointing
             console: Rich console for progress tracking
+            base_url: Custom base URL for OpenAI-compatible endpoints (optional)
         """
         self.model = model
         self.max_concurrent_requests = max_concurrent_requests
         self.temperature = temperature
         self._checkpoint_filename = checkpoint_filename
         self.console = console
+        self.base_url = base_url
 
         logger.info(
-            f"Initialized ClusterModel with model={model}, max_concurrent_requests={max_concurrent_requests}, temperature={temperature}"
+            f"Initialized ClusterModel with model={model}, max_concurrent_requests={max_concurrent_requests}, temperature={temperature}, base_url={base_url}"
         )
 
     @property
@@ -119,7 +122,19 @@ class ClusterDescriptionModel(BaseClusterDescriptionModel):
         import instructor
 
         self.sem = Semaphore(self.max_concurrent_requests)
-        self.client = instructor.from_provider(self.model, async_client=True)
+
+        # Create client with custom base_url if provided for OpenAI models
+        if self.base_url and self.model.startswith("openai/"):
+            from openai import AsyncOpenAI
+            # Strip provider prefix for actual API calls
+            model_name = self.model.split("/", 1)[1] if "/" in self.model else self.model
+            openai_client = AsyncOpenAI(base_url=self.base_url)
+            self.client = instructor.from_openai(openai_client)
+            # Store the model name to pass in API calls
+            self._api_model = model_name
+        else:
+            self.client = instructor.from_provider(self.model, async_client=True)
+            self._api_model = None
 
         if not self.console:
             # Simple processing without rich display
@@ -169,20 +184,25 @@ class ClusterDescriptionModel(BaseClusterDescriptionModel):
         )
         async with semaphore:
             try:
-                resp = await client.chat.completions.create(
-                    messages=[
+                # Add model parameter if using custom base_url
+                api_kwargs = {
+                    "messages": [
                         {
                             "role": "system",
                             "content": prompt,
                         },
                     ],
-                    response_model=GeneratedCluster,
-                    temperature=self.temperature,
-                    context={
+                    "response_model": GeneratedCluster,
+                    "temperature": self.temperature,
+                    "context": {
                         "positive_examples": summaries,
                         "contrastive_examples": contrastive_examples,
                     },
-                )
+                }
+                if hasattr(self, '_api_model') and self._api_model:
+                    api_kwargs['model'] = self._api_model
+
+                resp = await client.chat.completions.create(**api_kwargs)
 
                 cluster = Cluster(
                     name=resp.name,

@@ -42,8 +42,9 @@ class OpenAIEmbeddingModel(BaseEmbeddingModel):
         model_name: str = "text-embedding-3-small",
         model_batch_size: int = 50,
         n_concurrent_jobs: int = 5,
+        base_url: str | None = None,
     ):
-        self.client = AsyncOpenAI()
+        self.client = AsyncOpenAI(base_url=base_url)
         self.model_name = model_name
         self._model_batch_size = model_batch_size
         self._n_concurrent_jobs = n_concurrent_jobs

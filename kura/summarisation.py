@@ -159,6 +159,7 @@ class SummaryModel(BaseSummaryModel):
         checkpoint_filename: str = "summaries",
         console: Optional[Console] = None,
         cache: Optional[CacheStrategy] = None,
+        base_url: str | None = None,
     ):
         """
         Initialize SummaryModel with core configuration.
@@ -169,18 +170,20 @@ class SummaryModel(BaseSummaryModel):
             model: model identifier (e.g., "openai/gpt-4o-mini")
             max_concurrent_requests: Maximum concurrent API requests
             cache: Caching strategy to use (optional)
+            base_url: Custom base URL for OpenAI-compatible endpoints (optional)
         """
         self.model = model
         self.max_concurrent_requests = max_concurrent_requests
         self._checkpoint_filename = checkpoint_filename
         self.console = console
+        self.base_url = base_url
 
         # Initialize cache
         self.cache = cache
 
         cache_info = type(self.cache).__name__ if self.cache else "None"
         logger.info(
-            f"Initialized SummaryModel with model={model}, max_concurrent_requests={max_concurrent_requests}, cache={cache_info}"
+            f"Initialized SummaryModel with model={model}, max_concurrent_requests={max_concurrent_requests}, cache={cache_info}, base_url={base_url}"
         )
 
     @property
@@ -262,7 +265,18 @@ class SummaryModel(BaseSummaryModel):
 
         import instructor
 
-        client = instructor.from_provider(self.model, async_client=True)
+        # Create client with custom base_url if provided for OpenAI models
+        if self.base_url and self.model.startswith("openai/"):
+            from openai import AsyncOpenAI
+            # Strip provider prefix for actual API calls
+            model_name = self.model.split("/", 1)[1] if "/" in self.model else self.model
+            openai_client = AsyncOpenAI(base_url=self.base_url)
+            client = instructor.from_openai(openai_client)
+            # Store the model name to pass in API calls
+            self._api_model = model_name
+        else:
+            client = instructor.from_provider(self.model, async_client=True)
+            self._api_model = None
 
         if not self.console:
             # Simple progress tracking with tqdm
@@ -331,6 +345,11 @@ class SummaryModel(BaseSummaryModel):
 
         async with self.semaphore:  # type: ignore
             try:
+                # Add model parameter if using custom base_url
+                api_kwargs = kwargs.copy()
+                if hasattr(self, '_api_model') and self._api_model:
+                    api_kwargs['model'] = self._api_model
+
                 resp = await client.chat.completions.create(  # type: ignore
                     temperature=temperature,
                     messages=[
@@ -343,7 +362,7 @@ class SummaryModel(BaseSummaryModel):
                         "conversation": conversation,
                     },
                     response_model=response_schema,
-                    **kwargs,
+                    **api_kwargs,
                 )
                 logger.debug(
                     f"Successfully generated summary for conversation {conversation.chat_id}"
